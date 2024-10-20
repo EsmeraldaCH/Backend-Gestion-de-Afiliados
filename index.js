@@ -1,10 +1,12 @@
 const express = require('express');
+const mysql = require('mysql2');
 const passport = require('passport');
 const session = require('express-session');
 const path = require('path');
 const multer = require('multer');
 require('./auth'); // Asegúrate de tener este archivo configurado correctamente
 const cors = require('cors');
+const bodyParser = require('body-parser');
 
 const app = express();
 app.use(cors({
@@ -12,6 +14,7 @@ app.use(cors({
     credentials: true,
 }));
 
+app.use(bodyParser.json());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'cliente')));
 
@@ -89,7 +92,68 @@ app.get('/auth/google/failure', (req, res) => {
     res.send("Something went wrong");
 });
 
-// Iniciar el servidor
-app.listen(5000, () => {
-    console.log('Listening on port 5000');
+
+// Configuración de la conexión a MySQL
+const conexion = mysql.createConnection({
+    host: '127.0.0.1',    
+     port: 3306,        // Cambia si usas otro host
+    user: 'root',     // Tu usuario de MySQL (ejemplo: 'root')
+    password: 'root', // Tu contraseña de MySQL
+    database: 'usuarios'  // Nombre de tu base de datos
 });
+// Verificar la conexión
+conexion.connect((err) => {
+    if (err) {
+        console.error('Error al conectar a la base de datos:', err);
+    } else {
+        console.log('Conexión a la base de datos MySQL establecida');
+    }
+});
+
+// Endpoint de registro
+app.post('/registro', (req, res) => {
+    const { correo, contraseña } = req.body;
+
+    // Log de los datos recibidos
+    console.log('Datos recibidos:', req.body);
+
+    // Validar que el correo y la contraseña no estén vacíos
+    if (!correo || !contraseña) {
+        console.log('Error: Correo o contraseña vacíos');
+        return res.status(400).json({ message: 'Correo y contraseña son obligatorios' });
+    }
+
+    // Consulta SQL para insertar los datos en la tabla 'beneficiario'
+    const consulta = 'INSERT INTO beneficiario (correo, contraseña) VALUES (?, ?)';
+
+    // Ejecutar la consulta
+    conexion.query(consulta, [correo, contraseña], (err, result) => {
+        if (err) {
+            console.error('Error al insertar los datos:', err);
+            return res.status(500).json({ message: 'Error al registrar', error: err });
+        }
+
+        // Simulando un registro exitoso:
+  res.status(200).json({ message: 'Registro exitoso' });
+});
+});
+
+// Endpoint para iniciar sesión
+app.post('/login', (req, res) => {
+    const { correo } = req.body;  // Asegúrate de que estás usando req.body
+    const query = 'SELECT * FROM beneficiario WHERE correo = ?'; // Asegúrate de que tu tabla y columna existen
+    conexion.query(query, [correo], (error, results) => {
+      if (error) {
+        return res.status(500).json({ message: 'Error en la consulta a la base de datos' });
+      }
+      if (results.length > 0) {
+        res.json({ message: 'Usuario encontrado' });
+      } else {
+        res.status(404).json({ message: 'Usuario no encontrado' });
+      }
+    });
+  });
+
+app.listen(5000, () => {
+    console.log('Servidor corriendo en el puerto 5000');
+  });

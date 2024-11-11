@@ -1,6 +1,12 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth2').Strategy;
-require('dotenv').config();  // Cargar variables de entorno desde .env
+require('dotenv').config();
+
+// Verificar que las variables de entorno estén definidas
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    console.error('Error: Variables de entorno GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET son requeridas');
+    process.exit(1);
+}
 
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
@@ -8,20 +14,51 @@ passport.use(new GoogleStrategy({
     callbackURL: "http://localhost:5000/auth/google/callback",
     passReqToCallback: true
 },
-// Manejo de autenticación con Google OAuth
 function(request, accessToken, refreshToken, profile, done) {
-    console.log('Google Profile:', profile);  // Verifica los datos del perfil en la consola
-    done(null, profile);  // Pasar el perfil del usuario a la sesión
-}
-));
+    try {
+        console.log('Google Profile:', {
+            id: profile.id,
+            email: profile.email,
+            displayName: profile.displayName
+        });
+        
+        // Aquí podrías guardar el usuario en tu base de datos si lo necesitas
+        // Por ejemplo:
+        /*
+        const user = {
+            googleId: profile.id,
+            email: profile.email,
+            name: profile.displayName,
+            photo: profile.photos[0].value
+        };
+        // Guardar en base de datos...
+        */
 
-// Serializar usuario en la sesión
+        return done(null, profile);
+    } catch (error) {
+        console.error('Error en autenticación Google:', error);
+        return done(error, null);
+    }
+}));
+
+// Serializar el usuario
 passport.serializeUser((user, done) => {
-    done(null, user);
+    try {
+        done(null, user);
+    } catch (error) {
+        console.error('Error serializando usuario:', error);
+        done(error, null);
+    }
 });
 
-// Deserializar usuario desde la sesión
+// Deserializar el usuario
 passport.deserializeUser((user, done) => {
-    done(null, user);
+    try {
+        done(null, user);
+    } catch (error) {
+        console.error('Error deserializando usuario:', error);
+        done(error, null);
+    }
 });
 
+module.exports = passport;

@@ -165,7 +165,7 @@ app.post('/login', async (req, res) => {
 
         // Buscar usuario normal
         const [users] = await pool.execute(
-            'SELECT * FROM beneficiario WHERE correo = ? AND contraseña = ?',
+            'SELECT id, correo FROM beneficiario WHERE correo = ? AND contraseña = ?',
             [correo, contraseña]
         );
 
@@ -175,6 +175,7 @@ app.post('/login', async (req, res) => {
                 message: 'Login exitoso',
                 role: 'beneficiario',
                 user: {
+                    id: users[0].id,
                     correo: users[0].correo,
                     role: 'beneficiario'
                 }
@@ -362,16 +363,17 @@ app.post('/api/ninos', upload.fields([
     // Consulta SQL con rutas de los archivos
     const sql = `
         INSERT INTO niños_etapa_terminal (
-            nombre, apellido_paterno, apellido_materno, edad, sexo, fecha_nacimiento, curp, nivel_estudios,
+            beneficiario_id, nombre, apellido_paterno, apellido_materno, edad, sexo, fecha_nacimiento, curp, nivel_estudios,
             domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, telefono_fijo,
             telefono_fijo_extra, telefono_movil, telefono_movil_extra, servicios_vivienda, servicios_comunitarios,
             antecedentes_patologicos, servicios_salud, informe_medico, historial_medico, certificados_tratamientos_paliativos, descripcion_apoyo, 
             comprobante_domicilio, curp_documento, documento_identidad, declaracion_impuestos,
             comprobante_ingresos, carta_antecedentes_no_penales, referencias_personales_profesionales, foto_perfil
-        )   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     const valores = [
+        datos.beneficiarioId || null, 
         datos.nombre || null,
         datos.apellidoPaterno || null,
         datos.apellidoMaterno || null,
@@ -428,6 +430,23 @@ app.get('/api/ninos', async (req, res) => {
       res.status(500).json({ error: 'Error al obtener datos' });
     }
   });
+
+// Ruta para obtener los datos de un niño específico
+app.get('/api/ninos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const [rows] = await pool.query('SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?', [id]);
+      if (rows.length > 0) {
+        res.json(rows[0]);
+      } else {
+        res.status(404).json({ error: 'Usuario no encontrado' });
+      }
+    } catch (error) {
+      console.error('Error al obtener el usuario:', error);
+      res.status(500).json({ error: 'Error al obtener el usuario' });
+    }
+  });
+  
 
 // Iniciar el servidor
 const PORT = process.env.PORT || 5000;

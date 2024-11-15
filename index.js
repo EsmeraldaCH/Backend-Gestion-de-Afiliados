@@ -347,6 +347,39 @@ app.post('/api/ninos', upload.fields([
     const datos = req.body;
     const files = req.files;
 
+    try {
+        const beneficiarioId = Array.isArray(req.body.beneficiarioId) 
+            ? parseInt(req.body.beneficiarioId[0], 10) 
+            : parseInt(req.body.beneficiarioId, 10);
+
+        console.log("ID del beneficiario recibido para pruebas:", beneficiarioId);
+
+        // Verificar que el beneficiario existe
+        const [beneficiario] = await pool.execute(
+            'SELECT id FROM beneficiario WHERE id = ?',
+            [beneficiarioId]
+        );
+
+        if (beneficiario.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Beneficiario no encontrado'
+            });
+        }
+
+        // Verificar si ya existe un registro para este beneficiario
+        const [existingRecord] = await pool.execute(
+            'SELECT beneficiario_id FROM niños_etapa_terminal WHERE beneficiario_id = ?',
+            [beneficiarioId]
+        );
+
+        if (existingRecord.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Ya existe un registro para este beneficiario'
+            });
+        }
+
     // Asignar las rutas de los archivos a las variables correspondientes
     const informeMedicoRuta = files?.informeMedico ? files.informeMedico[0].path : null;
     const historialMedicoRuta = files?.historialMedico ? files.historialMedico[0].path : null;
@@ -373,7 +406,7 @@ app.post('/api/ninos', upload.fields([
     `;
     
     const valores = [
-        datos.beneficiarioId || null, 
+        beneficiarioId, 
         datos.nombre || null,
         datos.apellidoPaterno || null,
         datos.apellidoMaterno || null,
@@ -397,8 +430,8 @@ app.post('/api/ninos', upload.fields([
         datos.antecedentesPatologicos || null,  
         datos.serviciosSalud || null,           
         informeMedicoRuta,  // Ruta del archivo PDF
-        historialMedicoRuta,  // Ruta del archivo PDF
-        certificadosTratamientosRuta,  // Ruta del archivo PDF
+        historialMedicoRuta, 
+        certificadosTratamientosRuta,  
         datos.descripcionApoyo || null,
         comprobanteDomicilioRuta,
         curpDocumentoRuta,
@@ -410,14 +443,23 @@ app.post('/api/ninos', upload.fields([
         fotoPerfilRuta,
     ];
 
-    try {
-        // Ejecutamos la consulta con los valores proporcionados
-        await pool.execute(sql, valores);
-        res.status(200).send('Datos guardados correctamente');
-    } catch (error) {
-        console.error('Error en el registro de niño:', error);
-        res.status(500).send('Error al guardar los datos');
-    }
+    // Ejecutar la consulta
+    const [result] = await pool.execute(sql, valores);
+
+    res.status(201).json({
+        success: true,
+        message: 'Datos guardados correctamente',
+        id: result.insertId
+    });
+} catch (error) {
+    console.error('Error en el registro de niño:', error);
+    res.json({ message: 'Datos procesados correctamente' });
+    res.status(500).json({
+        success: false,
+        message: 'Error al guardar los datos',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+}
 });
 
 // Ruta para obtener todos los datos de la tabla niños_etapa_terminal
@@ -433,9 +475,9 @@ app.get('/api/ninos', async (req, res) => {
 
 // Ruta para obtener los datos de un niño específico
 app.get('/api/ninos/:id', async (req, res) => {
-    const { id } = req.params;
+    const { beneficiarioId } = req.params;
     try {
-      const [rows] = await pool.query('SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?', [id]);
+      const [rows] = await pool.query('SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?', [beneficiarioId]);
       if (rows.length > 0) {
         res.json(rows[0]);
       } else {

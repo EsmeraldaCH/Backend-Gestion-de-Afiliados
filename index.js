@@ -6,6 +6,7 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const bcrypt = require('bcrypt');
 
 // Crear la aplicación Express primero
 const app = express();
@@ -93,8 +94,6 @@ const upload = multer({
     }
 });
 
-
-// Endpoint de registro mejorado con async/await y mejor manejo de errores
 app.post('/registro', async (req, res) => {
     const { correo, contraseña } = req.body;
 
@@ -107,10 +106,13 @@ app.post('/registro', async (req, res) => {
             });
         }
 
+        // Convertir el correo a minúsculas
+        const correoNormalizado = correo.toLowerCase();
+
         // Verificar si el correo ya existe
         const [existingUsers] = await pool.execute(
             'SELECT * FROM beneficiario WHERE correo = ?',
-            [correo]
+            [correoNormalizado]
         );
 
         if (existingUsers.length > 0) {
@@ -120,10 +122,14 @@ app.post('/registro', async (req, res) => {
             });
         }
 
-        // Insertar nuevo usuario
+        // Encriptar la contraseña
+        const saltRounds = 10;
+        const contraseñaEncriptada = await bcrypt.hash(contraseña, saltRounds);
+
+        // Insertar nuevo usuario con contraseña encriptada
         const [result] = await pool.execute(
             'INSERT INTO beneficiario (correo, contraseña) VALUES (?, ?)',
-            [correo, contraseña]
+            [correoNormalizado, contraseñaEncriptada]
         );
 
         res.status(201).json({
@@ -142,60 +148,116 @@ app.post('/registro', async (req, res) => {
     }
 });
 
-// Endpoint de login mejorado con async/await y mejor manejo de errores
+// Endpoint de login mejorado con lógica específica para perfiles
 app.post('/login', async (req, res) => {
     const { correo, contraseña } = req.body;
 
     try {
-        // Verificar si es el administrador
-        if (correo === 'administrador@gmail.com') {
-            if (contraseña === 'FundacionAIKOI2024$') {
-                return res.json({
-                    success: true,
-                    message: 'Login exitoso',
-                    role: 'admin',
-                    user: { correo, role: 'admin' }
-                });
-            }
-            return res.status(401).json({
-                success: false,
-                message: 'Contraseña incorrecta'
-            });
-        }
+        const correoNormalizado = correo.toLowerCase();
 
-        // Buscar usuario normal
+
+// Verificar si es un administrador
+const [admins] = await pool.execute(
+    'SELECT id, nombre, correo, contraseña, is_principal FROM administrador WHERE correo = ?',
+    [correoNormalizado]
+);
+
+if (admins.length > 0) {
+    const admin = admins[0];
+
+    // Comparar la contraseña proporcionada con la contraseña encriptada en la base de datos
+    const isPasswordValid = await bcrypt.compare(contraseña, admin.contraseña);
+
+    if (isPasswordValid) {
+        // Convertir is_principal a número para evitar problemas de tipo
+        const isPrincipal = admin.is_principal === 1 ? 1 : 0;
+
+        return res.json({
+            success: true,
+            message: 'Login exitoso',
+            role: 'admin',
+            redirectUrl: '/admin/dashboard',
+            user: {
+                id: admin.id,
+                nombre: admin.nombre,
+                correo: admin.correo,
+                isPrincipal: isPrincipal
+            }
+        });
+    } else {
+        return res.status(401).json({
+            success: false,
+            message: 'Credenciales incorrectas.'
+        });
+    }
+} 
+
+        // Beneficiarios
         const [users] = await pool.execute(
-            'SELECT id, correo FROM beneficiario WHERE correo = ? AND contraseña = ?',
-            [correo, contraseña]
+            'SELECT id, correo, contraseña FROM beneficiario WHERE correo = ?',
+            [correoNormalizado]
         );
 
         if (users.length > 0) {
-            res.json({
+            const user = users[0];
+            const isPasswordValid = await bcrypt.compare(contraseña, user.contraseña);
+            if (!isPasswordValid) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Credenciales incorrectas.'
+                });
+            }
+
+            // Verificar en qué tabla tiene registro el beneficiario
+            const [niñosRecords] = await pool.execute(
+                'SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?',
+                [user.id]
+            );
+            const [discapacidadRecords] = await pool.execute(
+                'SELECT * FROM discapacidad WHERE beneficiario_id = ?',
+                [user.id]
+            );
+            const [terceraEdadRecords] = await pool.execute(
+                'SELECT * FROM tercera_edad WHERE beneficiario_id = ?',
+                [user.id]
+            );
+
+            let redirectUrl = '/seleccion-beneficiario'; // Por defecto, si no tiene registros
+
+            if (niñosRecords.length > 0) {
+                redirectUrl = `/Profile/${user.id}`;
+            } else if (discapacidadRecords.length > 0) {
+                redirectUrl = `/ProfileDiscapacidad/${user.id}`;
+            } else if (terceraEdadRecords.length > 0) {
+                redirectUrl = `/ProfileAdultos/${user.id}`;
+            }
+
+            return res.json({
                 success: true,
                 message: 'Login exitoso',
                 role: 'beneficiario',
+                redirectUrl,
                 user: {
-                    id: users[0].id,
-                    correo: users[0].correo,
+                    id: user.id,
+                    correo: user.correo,
                     role: 'beneficiario'
                 }
             });
-        } else {
-            res.status(401).json({
-                success: false,
-                message: 'Credenciales inválidas'
-            });
         }
 
+        return res.status(401).json({
+            success: false,
+            message: 'No encontramos una cuenta con estos datos.'
+        });
     } catch (error) {
         console.error('Error en login:', error);
         res.status(500).json({
             success: false,
-            message: 'Error interno del servidor',
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+            message: 'Error interno del servidor'
         });
     }
 });
+
 
 // Rutas de autenticación con Google
 app.get('/auth/google',
@@ -475,20 +537,578 @@ app.get('/api/ninos', async (req, res) => {
 
 // Ruta para obtener los datos de un niño específico
 app.get('/api/ninos/:id', async (req, res) => {
-    const { beneficiarioId } = req.params;
+    const { id } = req.params; // Extraer el ID del parámetro de la URL
     try {
-      const [rows] = await pool.query('SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?', [beneficiarioId]);
-      if (rows.length > 0) {
-        res.json(rows[0]);
-      } else {
-        res.status(404).json({ error: 'Usuario no encontrado' });
-      }
+        const [rows] = await pool.query(
+            'SELECT * FROM niños_etapa_terminal WHERE beneficiario_id = ?',
+            [id]
+        );
+        if (rows.length > 0) {
+            res.json(rows[0]); // Enviar solo el primer registro
+        } else {
+            res.status(404).json({ error: 'Usuario no encontrado' });
+        }
     } catch (error) {
-      console.error('Error al obtener el usuario:', error);
-      res.status(500).json({ error: 'Error al obtener el usuario' });
+        console.error('Error al obtener el usuario:', error);
+        res.status(500).json({ error: 'Error al obtener el usuario' });
+    }
+});
+
+
+// Ruta para guardar datos de discapacidad
+app.post('/api/discapacidad', upload.fields([
+    { name: 'certificadosDiscapacidad', maxCount: 1 },
+    { name: 'comprobanteDomicilio', maxCount: 1 },
+    { name: 'curpDocumento', maxCount: 1 },
+    { name: 'documentoIdentidad', maxCount: 1 },
+    { name: 'declaracionImpuestos', maxCount: 1 },
+    { name: 'comprobanteIngresos', maxCount: 1 },
+    { name: 'cartaAntecedentesNoPenales', maxCount: 1 },
+    { name: 'referenciasPersonalesProfesionales', maxCount: 1 },
+    { name: 'certificadosAcademicos', maxCount: 1 },
+    { name: 'diplomasTitulos', maxCount: 1 },
+    { name: 'fotoPerfil', maxCount: 1 }
+
+]), async (req, res) => {
+    const datos = req.body;
+    const files = req.files;
+
+    try {
+        const beneficiarioId = Array.isArray(req.body.beneficiarioId) 
+            ? parseInt(req.body.beneficiarioId[0], 10) 
+            : parseInt(req.body.beneficiarioId, 10);
+
+        console.log("ID del beneficiario recibido para pruebas:", beneficiarioId);
+
+        // Verificar que el beneficiario existe
+        const [beneficiario] = await pool.execute(
+            'SELECT id FROM beneficiario WHERE id = ?',
+            [beneficiarioId]
+        );
+
+        if (beneficiario.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Beneficiario no encontrado'
+            });
+        }
+
+        // Verificar si ya existe un registro para este beneficiario
+        const [existingRecord] = await pool.execute(
+            'SELECT beneficiario_id FROM discapacidad WHERE beneficiario_id = ?',
+            [beneficiarioId]
+        );
+
+        if (existingRecord.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Ya existe un registro para este beneficiario'
+            });
+        }
+
+    // Asignar las rutas de los archivos a las variables correspondientes
+    const certificadosDiscapacidadRuta = files?.certificadosDiscapacidad ? files.certificadosDiscapacidad[0].path : null;
+    const comprobanteDomicilioRuta = files?.comprobanteDomicilio ? files.comprobanteDomicilio[0].path : null;
+    const curpDocumentoRuta = files?.curpDocumento ? files.curpDocumento[0].path : null;
+    const documentoIdentidadRuta = files?.documentoIdentidad ? files.documentoIdentidad[0].path : null;
+    const declaracionImpuestosRuta = files?.declaracionImpuestos ? files.declaracionImpuestos[0].path : null;
+    const comprobanteIngresosRuta = files?.comprobanteIngresos ? files.comprobanteIngresos[0].path : null;
+    const cartaAntecedentesNoPenalesRuta = files?.cartaAntecedentesNoPenales ? files.cartaAntecedentesNoPenales[0].path : null;
+    const referenciasPersonalesProfesionalesRuta = files?.referenciasPersonalesProfesionales ? files.referenciasPersonalesProfesionales[0].path : null;
+    
+    const certificadosAcademicosRuta = files?.certificadosAcademicos ? files.certificadosAcademicos[0].path : null;
+    const diplomasTitulosRuta = files?.diplomasTitulos ? files.diplomasTitulos[0].path : null;
+    const fotoPerfilRuta = files?.fotoPerfil ? files.fotoPerfil[0].path : null;
+
+    // Consulta SQL con rutas de los archivos
+    const sql = `
+        INSERT INTO discapacidad (
+            beneficiario_id, nombre, apellido_paterno, apellido_materno, numero_identificacion_fiscal, sexo, fecha_nacimiento, edad, estado_civil, hijos, ocupacion, curp, nivel_estudios,
+            domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, telefono_fijo,
+            telefono_fijo_extra, telefono_movil, telefono_movil_extra, servicios_vivienda, servicios_comunitarios,
+            antecedentes_patologicos, servicios_salud, certificados_discapacidad, descripcion_apoyo, 
+            comprobante_domicilio, curp_documento, documento_identidad, declaracion_impuestos,
+            comprobante_ingresos, carta_antecedentes_no_penales, referencias_personales_profesionales, certificados_academicos, diplomas_titulos, foto_perfil
+        )   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    const valores = [
+        beneficiarioId, 
+        datos.nombre || null,
+        datos.apellidoPaterno || null,
+        datos.apellidoMaterno || null,
+        datos.numeroIdentificacionFiscal || null, //nuevo
+        datos.sexo || null,
+        datos.fechaNacimiento || null,
+        datos.edad || null, 
+        datos.estadoCivil || null, // nuevo
+        datos.hijos || null,  // nuevo
+        datos.ocupacion || null, // nuevo
+        datos.curp || null,
+        datos.nivelEstudios || null,
+        datos.domicilio || null,
+        datos.colonia || null,
+        datos.municipio || null,
+        datos.estado || null,
+        datos.codigoPostal || null,
+        datos.referencia || null,
+        datos.telefonoFijo || null,
+        datos.telefonoFijoExtra || null,
+        datos.telefonoMovil || null,
+        datos.telefonoMovilExtra || null,
+        datos.serviciosVivienda || null,
+        datos.serviciosComunitarios || null,
+        datos.antecedentesPatologicos || null,  
+        datos.serviciosSalud || null,           
+        certificadosDiscapacidadRuta,  // nuevo
+        datos.descripcionApoyo || null,
+        comprobanteDomicilioRuta,
+        curpDocumentoRuta,
+        documentoIdentidadRuta,
+        declaracionImpuestosRuta,
+        comprobanteIngresosRuta,
+        cartaAntecedentesNoPenalesRuta,
+        referenciasPersonalesProfesionalesRuta,
+        certificadosAcademicosRuta,  // nuevo
+        diplomasTitulosRuta, // nuevo
+        fotoPerfilRuta,
+    ];
+
+    // Ejecutar la consulta
+    const [result] = await pool.execute(sql, valores);
+
+    res.status(201).json({
+        success: true,
+        message: 'Datos guardados correctamente',
+        id: result.insertId
+    });
+} catch (error) {
+    console.error('Error en el registro de discapacidad:', error);
+    res.json({ message: 'Datos procesados correctamente' });
+    res.status(500).json({
+        success: false,
+        message: 'Error al guardar los datos',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+}
+});
+
+// Ruta para obtener todos los datos de la tabla discapacidad
+app.get('/api/discapacidad', async (req, res) => {
+    try {
+      const [rows] = await pool.query('SELECT * FROM discapacidad');
+      res.json(rows); // Enviar los datos en formato JSON
+    } catch (error) {
+      console.error('Error al obtener datos de discapacidad:', error);
+      res.status(500).json({ error: 'Error al obtener datos' });
+    }
+  });
+
+// Ruta para obtener los datos de discapacidad específico
+app.get('/api/discapacidad/:id', async (req, res) => {
+    const { id } = req.params; // Extraer el ID del parámetro de la URL
+    try {
+        const [rows] = await pool.query(
+            'SELECT * FROM discapacidad WHERE beneficiario_id = ?',
+            [id]
+        );
+        if (rows.length > 0) {
+            res.json(rows[0]); // Enviar solo el primer registro
+        } else {
+            res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+    } catch (error) {
+        console.error('Error al obtener el usuario:', error);
+        res.status(500).json({ error: 'Error al obtener el usuario' });
+    }
+});
+
+
+// Ruta para guardar datos de tercera_edad
+app.post('/api/adulto', upload.fields([
+    { name: 'comprobanteDomicilio', maxCount: 1 },
+    { name: 'curpDocumento', maxCount: 1 },
+    { name: 'documentoIdentidad', maxCount: 1 },
+    { name: 'declaracionImpuestos', maxCount: 1 },
+    { name: 'comprobanteIngresos', maxCount: 1 },
+    { name: 'cartaAntecedentesNoPenales', maxCount: 1 },
+    { name: 'referenciasPersonalesProfesionales', maxCount: 1 },
+    { name: 'certificadosAcademicos', maxCount: 1 },
+    { name: 'diplomasTitulos', maxCount: 1 },
+    { name: 'fotoPerfil', maxCount: 1 }
+
+]), async (req, res) => {
+    const datos = req.body;
+    const files = req.files;
+
+    try {
+        const beneficiarioId = Array.isArray(req.body.beneficiarioId) 
+            ? parseInt(req.body.beneficiarioId[0], 10) 
+            : parseInt(req.body.beneficiarioId, 10);
+
+        console.log("ID del beneficiario recibido para pruebas:", beneficiarioId);
+
+        // Verificar que el beneficiario existe
+        const [beneficiario] = await pool.execute(
+            'SELECT id FROM beneficiario WHERE id = ?',
+            [beneficiarioId]
+        );
+
+        if (beneficiario.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Beneficiario no encontrado'
+            });
+        }
+
+        // Verificar si ya existe un registro para este beneficiario
+        const [existingRecord] = await pool.execute(
+            'SELECT beneficiario_id FROM discapacidad WHERE beneficiario_id = ?',
+            [beneficiarioId]
+        );
+
+        if (existingRecord.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Ya existe un registro para este beneficiario'
+            });
+        }
+
+    // Asignar las rutas de los archivos a las variables correspondientes
+    const comprobanteDomicilioRuta = files?.comprobanteDomicilio ? files.comprobanteDomicilio[0].path : null;
+    const curpDocumentoRuta = files?.curpDocumento ? files.curpDocumento[0].path : null;
+    const documentoIdentidadRuta = files?.documentoIdentidad ? files.documentoIdentidad[0].path : null;
+    const declaracionImpuestosRuta = files?.declaracionImpuestos ? files.declaracionImpuestos[0].path : null;
+    const comprobanteIngresosRuta = files?.comprobanteIngresos ? files.comprobanteIngresos[0].path : null;
+    const cartaAntecedentesNoPenalesRuta = files?.cartaAntecedentesNoPenales ? files.cartaAntecedentesNoPenales[0].path : null;
+    const referenciasPersonalesProfesionalesRuta = files?.referenciasPersonalesProfesionales ? files.referenciasPersonalesProfesionales[0].path : null;
+    
+    const certificadosAcademicosRuta = files?.certificadosAcademicos ? files.certificadosAcademicos[0].path : null;
+    const diplomasTitulosRuta = files?.diplomasTitulos ? files.diplomasTitulos[0].path : null;
+    const fotoPerfilRuta = files?.fotoPerfil ? files.fotoPerfil[0].path : null;
+
+    // Consulta SQL con rutas de los archivos
+    const sql = `
+        INSERT INTO tercera_edad (
+            beneficiario_id, nombre, apellido_paterno, apellido_materno, numero_identificacion_fiscal, sexo, fecha_nacimiento, edad, estado_civil, hijos, ocupacion, curp, nivel_estudios,
+            domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, telefono_fijo,
+            telefono_fijo_extra, telefono_movil, telefono_movil_extra, servicios_vivienda, servicios_comunitarios,
+            antecedentes_patologicos, servicios_salud, descripcion_apoyo, 
+            comprobante_domicilio, curp_documento, documento_identidad, declaracion_impuestos,
+            comprobante_ingresos, carta_antecedentes_no_penales, referencias_personales_profesionales, certificados_academicos, diplomas_titulos, foto_perfil
+        )   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    
+    const valores = [
+        beneficiarioId, 
+        datos.nombre || null,
+        datos.apellidoPaterno || null,
+        datos.apellidoMaterno || null,
+        datos.numeroIdentificacionFiscal || null, //nuevo
+        datos.sexo || null,
+        datos.fechaNacimiento || null,
+        datos.edad || null, 
+        datos.estadoCivil || null, // nuevo
+        datos.hijos || null,  // nuevo
+        datos.ocupacion || null, // nuevo
+        datos.curp || null,
+        datos.nivelEstudios || null,
+        datos.domicilio || null,
+        datos.colonia || null,
+        datos.municipio || null,
+        datos.estado || null,
+        datos.codigoPostal || null,
+        datos.referencia || null,
+        datos.telefonoFijo || null,
+        datos.telefonoFijoExtra || null,
+        datos.telefonoMovil || null,
+        datos.telefonoMovilExtra || null,
+        datos.serviciosVivienda || null,
+        datos.serviciosComunitarios || null,
+        datos.antecedentesPatologicos || null,  
+        datos.serviciosSalud || null,           
+        datos.descripcionApoyo || null,
+        comprobanteDomicilioRuta,
+        curpDocumentoRuta,
+        documentoIdentidadRuta,
+        declaracionImpuestosRuta,
+        comprobanteIngresosRuta,
+        cartaAntecedentesNoPenalesRuta,
+        referenciasPersonalesProfesionalesRuta,
+        certificadosAcademicosRuta,  // nuevo
+        diplomasTitulosRuta, // nuevo
+        fotoPerfilRuta,
+    ];
+
+    // Ejecutar la consulta
+    const [result] = await pool.execute(sql, valores);
+
+    res.status(201).json({
+        success: true,
+        message: 'Datos guardados correctamente',
+        id: result.insertId
+    });
+} catch (error) {
+    console.error('Error en el registro de Tercera Edad:', error);
+    res.json({ message: 'Datos procesados correctamente' });
+    res.status(500).json({
+        success: false,
+        message: 'Error al guardar los datos',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+}
+});
+
+// Ruta para obtener todos los datos de la tabla tercera_edad
+app.get('/api/adulto', async (req, res) => {
+    try {
+      const [rows] = await pool.query('SELECT * FROM tercera_edad');
+      res.json(rows); // Enviar los datos en formato JSON
+    } catch (error) {
+      console.error('Error al obtener datos de discapacidad:', error);
+      res.status(500).json({ error: 'Error al obtener datos' });
+    }
+  });
+
+// Ruta para obtener los datos de tercera_edad específico
+app.get('/api/adulto/:id', async (req, res) => {
+    const { id } = req.params; // Extraer el ID del parámetro de la URL
+    try {
+        const [rows] = await pool.query(
+            'SELECT * FROM tercera_edad WHERE beneficiario_id = ?',
+            [id]
+        );
+        if (rows.length > 0) {
+            res.json(rows[0]); // Enviar solo el primer registro
+        } else {
+            res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+    } catch (error) {
+        console.error('Error al obtener el usuario:', error);
+        res.status(500).json({ error: 'Error al obtener el usuario' });
+    }
+});
+
+// Ruta para eliminar un beneficiario y registros relacionados
+app.delete('/api/beneficiarios/:id', async (req, res) => {
+    const { id } = req.params; // Extraer el ID del parámetro de la URL
+    try {
+        // Intentar eliminar el beneficiario
+        const [result] = await pool.query('DELETE FROM beneficiario WHERE id = ?', [id]);
+        
+        if (result.affectedRows > 0) {
+            res.json({ message: 'Beneficiario eliminado exitosamente' });
+        } else {
+            res.status(404).json({ error: 'Beneficiario no encontrado' });
+        }
+    } catch (error) {
+        console.error('Error al eliminar el beneficiario:', error);
+        res.status(500).json({ error: 'Error al eliminar el beneficiario' });
+    }
+});
+
+app.post('/api/admin/add-admin', async (req, res) => {
+    const { nombre, correo, contraseña, curp} = req.body;
+  
+    // Validar que los campos estén completos
+    if (!nombre || !correo || !contraseña || !curp) {
+      return res.status(400).json({ error: 'Todos los campos son obligatorios' });
+    }
+  
+    try {
+      // Verificar si el correo ya está registrado en la base de datos
+      const [existingAdmin] = await pool.query('SELECT * FROM administrador WHERE correo = ?', [correo]);
+      if (existingAdmin.length > 0) {
+        return res.status(409).json({ error: 'El correo ya está registrado' });
+      }
+  
+      // Verificar si ya existe un administrador principal
+      const [principalAdmin] = await pool.query('SELECT * FROM administrador WHERE is_principal = 1');
+      
+      let isPrincipal = 0; // Por defecto, el nuevo administrador será un administrador normal
+      if (principalAdmin.length === 0) {
+        // Si no existe ningún administrador principal, asignamos este rol al primer registro
+        isPrincipal = 1;
+      }
+  
+      // Encriptar la contraseña con bcrypt
+      const hashedPassword = await bcrypt.hash(contraseña, 10);
+      const curpRegex = /^[A-Z]{4}\d{6}[A-Z]{6}\d{2}$/;
+
+  
+
+  
+      // Insertar el nuevo administrador en la base de datos
+      const [result] = await pool.query(
+        'INSERT INTO administrador (nombre, correo, curp, contraseña, is_principal) VALUES (?, ?, ?, ?, ?)',
+        [nombre, correo, curp, hashedPassword, isPrincipal]
+      );
+  
+      // Enviar una respuesta exitosa con el ID del nuevo administrador
+      res.status(201).json({ message: 'Administrador agregado correctamente', id: result.insertId });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: 'Error al agregar el administrador' });
+    }
+  });
+
+// Ruta para obtener administradores activos e inactivos
+app.get('/api/admin/list', async (req, res) => {
+    try {
+      const [activos] = await pool.query('SELECT id, nombre, correo, curp, "Activo" as estado FROM administrador WHERE contraseña IS NOT NULL');
+      const [inactivos] = await pool.query('SELECT id, nombre, correo, curp, "Inactivo" as estado FROM administrador WHERE contraseña IS NULL');
+  
+      res.json({ activos, inactivos });
+    } catch (error) {
+      console.error('Error al obtener la lista de administradores:', error);
+      res.status(500).json({ error: 'Error interno del servidor' });
     }
   });
   
+  
+// Ruta para desactivar a un administrador con validación de contraseña
+app.post('/api/admin/deactivate', async (req, res) => {
+    const { adminId, principalPassword } = req.body;
+  
+    try {
+      // 1. Verificar si la contraseña corresponde al administrador principal
+      const [principalAdmin] = await pool.query(
+        'SELECT contraseña FROM administrador WHERE is_principal = 1 LIMIT 1'
+      );
+  
+      if (!principalAdmin.length) {
+        return res.status(403).json({ message: 'No se encontró el administrador principal.' });
+      }
+  
+      const isPasswordValid = await bcrypt.compare(
+        principalPassword,
+        principalAdmin[0].contraseña
+      );
+  
+      if (!isPasswordValid) {
+        return res.status(403).json({ message: 'Contraseña incorrecta.' });
+      }
+  
+      // 2. Proceder con la desactivación
+      await pool.query('UPDATE administrador SET contraseña = NULL WHERE id = ?', [adminId]);
+      res.json({ message: 'Administrador desactivado correctamente.' });
+    } catch (error) {
+      console.error('Error al desactivar el administrador:', error);
+      res.status(500).json({ message: 'Error interno del servidor.' });
+    }
+  });
+// Ruta para acctualizar los datos de niños, FALTAN AGREGAR LAS OTRAS DOS RUTAS
+app.put('/api/ninos/:id', async (req, res) => {
+    const { 
+        nombre, apellido_paterno, apellido_materno, edad, sexo, curp, nivel_estudios,
+        domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, telefono_fijo,
+        telefono_movil, descripcion_apoyo
+    } = req.body;
+
+    // Obtener el 'id' de la URL
+    const { id } = req.params;  // Aquí accedes al 'id' de la URL
+
+    // Validar los campos requeridos. Si deseas realizar validaciones más específicas, ajusta según sea necesario.
+    if (!nombre || !apellido_paterno || !apellido_materno ) {
+        return res.status(400).json({ error: 'Todos los campos son obligatorios' });
+    }
+
+    try {
+        const [result] = await pool.query(
+            `
+            UPDATE niños_etapa_terminal
+            SET 
+                nombre = ?, apellido_paterno = ?, apellido_materno = ?, edad = ?, sexo = ?, curp = ?, nivel_estudios = ?,
+                domicilio_calle_numero = ?, colonia = ?, municipio = ?, estado = ?, codigo_postal = ?, referencia = ?, telefono_fijo = ?, 
+                telefono_movil = ?, descripcion_apoyo = ?
+            WHERE beneficiario_id = ?;
+            `,
+            [
+                nombre, apellido_paterno, apellido_materno, edad, sexo, curp, nivel_estudios,
+                domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, telefono_fijo, 
+                telefono_movil, descripcion_apoyo,
+                id // Ahora el 'id' está definido y se pasa a la consulta
+            ]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        res.status(200).json({ message: 'Usuario actualizado con éxito' });
+    } catch (error) {
+        console.error('Error al actualizar el usuario:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+
+// Ruta para obtener estadísticas de los niños en etapa terminal
+app.get('/api/estadisticas/ninos', async (req, res) => {
+    try {
+      // Obtener estadísticas de sexo
+      const [sexo] = await pool.query('SELECT sexo, COUNT(*) AS count FROM niños_etapa_terminal GROUP BY sexo');
+  
+      // Obtener estadísticas de edad (1 a 18 años)
+      const [edad] = await pool.query('SELECT edad, COUNT(*) AS count FROM niños_etapa_terminal WHERE edad BETWEEN 1 AND 18 GROUP BY edad');
+  
+      // Obtener estadísticas de estado
+      const [estado] = await pool.query('SELECT estado, COUNT(*) AS count FROM niños_etapa_terminal GROUP BY estado');
+  
+      // Obtener estadísticas de nivel de estudios
+      const [nivel_estudios] = await pool.query('SELECT nivel_estudios, COUNT(*) AS count FROM niños_etapa_terminal GROUP BY nivel_estudios');
+  
+      res.json({ sexo, edad, estado, nivel_estudios });
+    } catch (error) {
+      console.error('Error al obtener estadísticas de niños:', error);
+      res.status(500).json({ error: 'Error al obtener estadísticas de niños' });
+    }
+  });
+
+  // Ruta para obtener estadísticas de personas con discapacidad
+app.get('/api/estadisticas/personas-discapacidad', async (req, res) => {
+    try {
+      // Obtener estadísticas de sexo
+      const [sexo] = await pool.query('SELECT sexo, COUNT(*) AS count FROM discapacidad GROUP BY sexo');
+  
+      // Obtener estadísticas de edad (1 a 100 años)
+      const [edad] = await pool.query('SELECT edad, COUNT(*) AS count FROM discapacidad WHERE edad BETWEEN 1 AND 100 GROUP BY edad');
+  
+      // Obtener estadísticas de estado
+      const [estado] = await pool.query('SELECT estado, COUNT(*) AS count FROM discapacidad GROUP BY estado');
+  
+      // Obtener estadísticas de nivel de estudios
+      const [nivel_estudios] = await pool.query('SELECT nivel_estudios, COUNT(*) AS count FROM discapacidad GROUP BY nivel_estudios');
+  
+      res.json({ sexo, edad, estado, nivel_estudios});
+    } catch (error) {
+      console.error('Error al obtener estadísticas de personas con discapacidad:', error);
+      res.status(500).json({ error: 'Error al obtener estadísticas de personas con discapacidad' });
+    }
+  });
+  
+  // Ruta para obtener estadísticas de los adultos mayores
+app.get('/api/estadisticas/adultos-mayores', async (req, res) => {
+    try {
+      // Obtener estadísticas de sexo
+      const [sexo] = await pool.query('SELECT sexo, COUNT(*) AS count FROM tercera_edad GROUP BY sexo');
+  
+      // Obtener estadísticas de edad (60 a 100 años)
+      const [edad] = await pool.query('SELECT edad, COUNT(*) AS count FROM tercera_edad WHERE edad BETWEEN 60 AND 100 GROUP BY edad');
+  
+      // Obtener estadísticas de estado
+      const [estado] = await pool.query('SELECT estado, COUNT(*) AS count FROM tercera_edad GROUP BY estado');
+  
+      // Obtener estadísticas de nivel de estudios
+      const [nivel_estudios] = await pool.query('SELECT nivel_estudios, COUNT(*) AS count FROM tercera_edad GROUP BY nivel_estudios');
+  
+      res.json({ sexo, edad, estado, nivel_estudios });
+    } catch (error) {
+      console.error('Error al obtener estadísticas de adultos mayores:', error);
+      res.status(500).json({ error: 'Error al obtener estadísticas de adultos mayores' });
+    }
+  });
+
 
 // Iniciar el servidor
 const PORT = process.env.PORT || 5000;

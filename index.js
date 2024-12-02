@@ -187,7 +187,7 @@ if (admins.length > 0) {
     } else {
         return res.status(401).json({
             success: false,
-            message: 'Credenciales incorrectas.'
+            message: 'No encontramos una cuenta con estos datos.'
         });
     }
 } 
@@ -204,7 +204,7 @@ if (admins.length > 0) {
             if (!isPasswordValid) {
                 return res.status(401).json({
                     success: false,
-                    message: 'Credenciales incorrectas.'
+                    message: 'No encontramos una cuenta con estos datos.'
                 });
             }
 
@@ -257,7 +257,6 @@ if (admins.length > 0) {
         });
     }
 });
-
 
 // Rutas de autenticación con Google
 app.get('/auth/google',
@@ -389,7 +388,6 @@ app.get('/auth/logout', (req, res) => {
         });
     });
 });
-
 
 // Ruta para guardar datos de niños
 app.post('/api/ninos', upload.fields([
@@ -553,7 +551,6 @@ app.get('/api/ninos/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al obtener el usuario' });
     }
 });
-
 
 // Ruta para guardar datos de discapacidad
 app.post('/api/discapacidad', upload.fields([
@@ -722,7 +719,6 @@ app.get('/api/discapacidad/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al obtener el usuario' });
     }
 });
-
 
 // Ruta para guardar datos de tercera_edad
 app.post('/api/adulto', upload.fields([
@@ -965,7 +961,6 @@ app.get('/api/admin/list', async (req, res) => {
     }
   });
   
-  
 // Ruta para desactivar a un administrador con validación de contraseña
 app.post('/api/admin/deactivate', async (req, res) => {
     const { adminId, principalPassword } = req.body;
@@ -997,7 +992,7 @@ app.post('/api/admin/deactivate', async (req, res) => {
       res.status(500).json({ message: 'Error interno del servidor.' });
     }
   });
-// Ruta para acctualizar los datos de niños, FALTAN AGREGAR LAS OTRAS DOS RUTAS
+// Ruta para actualizar los datos de niños
 app.put('/api/ninos/:id', async (req, res) => {
     const { 
         nombre, apellido_paterno, apellido_materno, edad, sexo, curp, nivel_estudios,
@@ -1042,6 +1037,180 @@ app.put('/api/ninos/:id', async (req, res) => {
     }
 });
 
+// Ruta para actualizar los datos de tercera edad
+app.put('/api/adulto/:id', async (req, res) => {
+    const { 
+        nombre, apellido_paterno, apellido_materno, sexo, estado_civil, curp,
+        domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, ocupacion, nivel_estudios,
+        telefono_fijo, telefono_movil, hijos, descripcion_apoyo 
+    } = req.body;
+
+    // Obtener el 'id' de la URL
+    const { id } = req.params;
+
+    // Validar los campos requeridos
+    if (!nombre || !apellido_paterno || !apellido_materno || !sexo) {
+        return res.status(400).json({ error: 'Todos los campos son obligatorios' });
+    }
+
+    try {
+        const [result] = await pool.query(
+            `
+            UPDATE tercera_edad
+            SET 
+                nombre = ?, apellido_paterno = ?, apellido_materno = ?, sexo = ?, estado_civil = ?, 
+                curp = ?, domicilio_calle_numero = ?, colonia = ?, municipio = ?, estado = ?, codigo_postal = ?, referencia = ?, 
+                ocupacion = ?, nivel_estudios = ?, telefono_fijo = ?, telefono_movil = ?, hijos = ?, descripcion_apoyo = ?
+            WHERE beneficiario_id = ?;
+            `,
+            [
+                nombre, apellido_paterno, apellido_materno, sexo, estado_civil, curp,
+                domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, ocupacion, nivel_estudios,
+                telefono_fijo, telefono_movil, hijos, descripcion_apoyo,
+                id // Aquí estamos pasando el 'id' para identificar el registro
+            ]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        res.status(200).json({ message: 'Usuario de tercera edad actualizado con éxito' });
+    } catch (error) {
+        console.error('Error al actualizar el usuario:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+// Ruta para actualizar los datos de discapacidad
+app.put('/api/discapacidad/:id', async (req, res) => {
+    const { 
+        nombre, apellido_paterno, apellido_materno, sexo, estado_civil, curp,
+        domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, ocupacion, nivel_estudios,
+        telefono_fijo, telefono_movil, hijos, descripcion_apoyo 
+    } = req.body;
+
+    // Obtener el 'id' de la URL
+    const { id } = req.params;
+
+    // Validar los campos requeridos
+    if (!nombre || !apellido_paterno || !apellido_materno || !sexo) {
+        return res.status(400).json({ error: 'Todos los campos son obligatorios' });
+    }
+
+    try {
+        const [result] = await pool.query(
+            `
+            UPDATE discapacidad
+            SET 
+                nombre = ?, apellido_paterno = ?, apellido_materno = ?, sexo = ?, estado_civil = ?, 
+                curp = ?, domicilio_calle_numero = ?, colonia = ?, municipio = ?, estado = ?, codigo_postal = ?, referencia = ?, 
+                ocupacion = ?, nivel_estudios = ?, telefono_fijo = ?, telefono_movil = ?, hijos = ?, descripcion_apoyo = ?
+            WHERE beneficiario_id = ?;
+            `,
+            [
+                nombre, apellido_paterno, apellido_materno, sexo, estado_civil, curp,
+                domicilio_calle_numero, colonia, municipio, estado, codigo_postal, referencia, ocupacion, nivel_estudios,
+                telefono_fijo, telefono_movil, hijos, descripcion_apoyo,
+                id // Aquí estamos pasando el 'id' para identificar el registro
+            ]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+
+        res.status(200).json({ message: 'Usuario con discapacidad actualizado con éxito' });
+    } catch (error) {
+        console.error('Error al actualizar el usuario:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+
+app.put('/api/administradores/:id', async (req, res) => {
+    const { nombre, correo, curp, nuevaContrasena } = req.body;
+    const { id } = req.params;
+
+    if (!id) {
+        return res.status(400).json({ error: 'ID del administrador es obligatorio' });
+    }
+
+    if (!nombre || nombre.trim() === '') {
+        return res.status(400).json({ error: 'El nombre es obligatorio' });
+    }
+
+    try {
+        const adminId = parseInt(id, 10);
+
+        if (isNaN(adminId)) {
+            return res.status(400).json({ error: 'ID de administrador inválido' });
+        }
+
+        let query, values;
+        let hashedPassword;
+
+        // Preparar la consulta dependiendo de si hay nueva contraseña
+        if (nuevaContrasena) {
+            const saltRounds = 10;
+            hashedPassword = await bcrypt.hash(nuevaContrasena, saltRounds);
+
+            query = `
+                UPDATE administrador 
+                SET nombre = ?, correo = ?, curp = ?, contraseña = ?
+                WHERE id = ?
+            `;
+            values = [nombre.trim(), correo, curp, hashedPassword, adminId];
+        } else {
+            query = `
+                UPDATE administrador 
+                SET nombre = ?, correo = ?, curp = ?
+                WHERE id = ?
+            `;
+            values = [nombre.trim(), correo, curp, adminId];
+        }
+
+        const [result] = await pool.query(query, values);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Administrador no encontrado' });
+        }
+
+        res.status(200).json({ message: 'Administrador actualizado con éxito' });
+    } catch (error) {
+        console.error('Error al actualizar el administrador:', error);
+        res.status(500).json({ 
+            error: 'Error interno del servidor',
+            detalle: error.message 
+        });
+    }
+});
+
+// Endpoint para obtener datos del administrador
+app.get('/api/administradores/:id', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const adminId = parseInt(id, 10);
+
+        if (isNaN(adminId)) {
+            return res.status(400).json({ error: 'ID de administrador inválido' });
+        }
+
+        const [rows] = await pool.query(
+            'SELECT nombre, correo, curp FROM administrador WHERE id = ?', 
+            [adminId]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Administrador no encontrado' });
+        }
+
+        res.json(rows[0]);
+    } catch (error) {
+        console.error('Error al obtener los datos del administrador:', error);
+        res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
 
 // Ruta para obtener estadísticas de los niños en etapa terminal
 app.get('/api/estadisticas/ninos', async (req, res) => {
@@ -1108,7 +1277,6 @@ app.get('/api/estadisticas/adultos-mayores', async (req, res) => {
       res.status(500).json({ error: 'Error al obtener estadísticas de adultos mayores' });
     }
   });
-
 
 // Iniciar el servidor
 const PORT = process.env.PORT || 5000;
